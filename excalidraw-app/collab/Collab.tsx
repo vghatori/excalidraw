@@ -361,12 +361,12 @@ class Collab extends PureComponent<CollabProps, CollabState> {
       ),
     );
 
-    if (this.portal.socket && this.fallbackInitializationHandler) {
-      this.portal.socket.off(
-        "connect_error",
-        this.fallbackInitializationHandler,
-      );
-    }
+    // if (this.portal.socket && this.fallbackInitializationHandler) {
+    //   this.portal.socket.off(
+    //     "connect_error",
+    //     this.fallbackInitializationHandler,
+    //   );
+    // }
 
     if (!keepRemoteState) {
       LocalData.fileStorage.reset();
@@ -431,7 +431,7 @@ class Collab extends PureComponent<CollabProps, CollabState> {
           !element.isDeleted &&
           (opts.forceFetchFiles
             ? element.status !== "pending" ||
-              Date.now() - element.updated > 10000
+            Date.now() - element.updated > 10000
             : element.status === "saved")
         );
       })
@@ -500,9 +500,6 @@ class Collab extends PureComponent<CollabProps, CollabState> {
     this.setIsCollaborating(true);
     LocalData.pauseSave("collaboration");
 
-    const { default: socketIOClient } = await import(
-      /* webpackChunkName: "socketIoClient" */ "socket.io-client"
-    );
 
     const fallbackInitializationHandler = () => {
       this.initializeRoom({
@@ -515,15 +512,14 @@ class Collab extends PureComponent<CollabProps, CollabState> {
     this.fallbackInitializationHandler = fallbackInitializationHandler;
 
     try {
+      const socket = new WebSocket("ws://localhost:5000/ws");
       this.portal.socket = this.portal.open(
-        socketIOClient(import.meta.env.VITE_APP_WS_SERVER_URL, {
-          transports: ["websocket", "polling"],
-        }),
+        socket,
         roomId,
         roomKey,
       );
 
-      this.portal.socket.once("connect_error", fallbackInitializationHandler);
+      //  this.portal.socket.once("connect_error", fallbackInitializationHandler);
     } catch (error: any) {
       console.error(error);
       this.setErrorDialog(error.message);
@@ -557,20 +553,25 @@ class Collab extends PureComponent<CollabProps, CollabState> {
     );
 
     // All socket listeners are moving to Portal
-    this.portal.socket.on(
-      "client-broadcast",
-      async (encryptedData: ArrayBuffer, iv: Uint8Array) => {
+    const handleCallBackMessage = async (event: MessageEvent) => {
+      // console.log(event.data);
+      const { e_type, iv, encryptedBuffer, socketId } = JSON.parse(event.data);
+      if (socketId === this.portal.SocketId) return;
+      if (e_type === "client-broadcast") {
         if (!this.portal.roomKey) {
+          console.log("sai room key");
           return;
         }
-
+        // encryptedData: ArrayBuffer, iv: Uint8Array
+        console.log(this.portal.roomKey);
         const decryptedData = await this.decryptPayload(
-          iv,
-          encryptedData,
+          new Uint8Array(iv),
+          new Uint8Array(encryptedBuffer).buffer,
           this.portal.roomKey,
         );
 
         switch (decryptedData.type) {
+
           case WS_SUBTYPES.INVALID_RESPONSE:
             return;
           case WS_SUBTYPES.INIT: {
@@ -659,30 +660,30 @@ class Collab extends PureComponent<CollabProps, CollabState> {
             assertNever(decryptedData, null);
           }
         }
-      },
-    );
-
-    this.portal.socket.on("first-in-room", async () => {
-      if (this.portal.socket) {
-        this.portal.socket.off("first-in-room");
       }
-      const sceneData = await this.initializeRoom({
-        fetchScene: true,
-        roomLinkData: existingRoomLinkData,
-      });
-      scenePromise.resolve(sceneData);
-    });
+    };
+    this.portal.onCallBackMessage = handleCallBackMessage;
+    // this.portal.socket.on("first-in-room", async () => {
+    //   if (this.portal.socket) {
+    //     this.portal.socket.off("first-in-room");
+    //   }
+    //   const sceneData = await this.initializeRoom({
+    //     fetchScene: true,
+    //     roomLinkData: existingRoomLinkData,
+    //   });
+    //   scenePromise.resolve(sceneData);
+    // });
 
-    this.portal.socket.on(
-      WS_EVENTS.USER_FOLLOW_ROOM_CHANGE,
-      (followedBy: SocketId[]) => {
-        this.excalidrawAPI.updateScene({
-          appState: { followedBy: new Set(followedBy) },
-        });
+    // this.portal.socket.on(
+    //   WS_EVENTS.USER_FOLLOW_ROOM_CHANGE,
+    //   (followedBy: SocketId[]) => {
+    //     this.excalidrawAPI.updateScene({
+    //       appState: { followedBy: new Set(followedBy) },
+    //     });
 
-        this.relayVisibleSceneBounds({ force: true });
-      },
-    );
+    //     this.relayVisibleSceneBounds({ force: true });
+    //   },
+    // );
 
     this.initializeIdleDetector();
 
@@ -696,17 +697,17 @@ class Collab extends PureComponent<CollabProps, CollabState> {
     roomLinkData,
   }:
     | {
-        fetchScene: true;
-        roomLinkData: { roomId: string; roomKey: string } | null;
-      }
+      fetchScene: true;
+      roomLinkData: { roomId: string; roomKey: string } | null;
+    }
     | { fetchScene: false; roomLinkData?: null }) => {
     clearTimeout(this.socketInitializationTimer!);
-    if (this.portal.socket && this.fallbackInitializationHandler) {
-      this.portal.socket.off(
-        "connect_error",
-        this.fallbackInitializationHandler,
-      );
-    }
+    // if (this.portal.socket && this.fallbackInitializationHandler) {
+    //   this.portal.socket.off(
+    //     "connect_error",
+    //     this.fallbackInitializationHandler,
+    //   );
+    // }
     if (fetchScene && roomLinkData && this.portal.socket) {
       this.excalidrawAPI.resetScene();
 
@@ -848,7 +849,7 @@ class Collab extends PureComponent<CollabProps, CollabState> {
       collaborators.set(
         socketId,
         Object.assign({}, this.collaborators.get(socketId), {
-          isCurrentUser: socketId === this.portal.socket?.id,
+          isCurrentUser: socketId === this.portal.SocketId,
         }),
       );
     }
@@ -863,7 +864,7 @@ class Collab extends PureComponent<CollabProps, CollabState> {
       collaborators.get(socketId),
       updates,
       {
-        isCurrentUser: socketId === this.portal.socket?.id,
+        isCurrentUser: socketId === this.portal.SocketId,
       },
     );
     collaborators.set(socketId, user);
@@ -907,7 +908,7 @@ class Collab extends PureComponent<CollabProps, CollabState> {
         {
           sceneBounds: getVisibleSceneBounds(appState),
         },
-        `follow@${this.portal.socket.id}`,
+        `follow@${this.portal.SocketId}`,
       );
     }
   };

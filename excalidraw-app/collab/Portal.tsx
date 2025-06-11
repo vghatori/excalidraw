@@ -4,7 +4,7 @@ import { encryptData } from "@excalidraw/excalidraw/data/encryption";
 import { newElementWith } from "@excalidraw/element";
 import throttle from "lodash.throttle";
 
-import type { UserIdleState } from "@excalidraw/common";
+import { randomId, type UserIdleState } from "@excalidraw/common";
 import type { OrderedExcalidrawElement } from "@excalidraw/element/types";
 import type {
   OnUserFollowedPayload,
@@ -20,42 +20,99 @@ import type {
   SyncableExcalidrawElement,
 } from "../data";
 import type { TCollabClass } from "./Collab";
-import type { Socket } from "socket.io-client";
+
+interface ESocket {
+  e_type: string,
+  data: {
+    socketId: string,
+    clients: SocketId[]
+  }
+}
 
 class Portal {
   collab: TCollabClass;
-  socket: Socket | null = null;
+  socket: WebSocket | null = null;
   socketInitialized: boolean = false; // we don't want the socket to emit any updates until it is fully initialized
   roomId: string | null = null;
   roomKey: string | null = null;
+  SocketId: string | null = null;
+  onCallBackMessage: any;
+  // onCallBackMessage : Function 
   broadcastedElementVersions: Map<string, number> = new Map();
-
   constructor(collab: TCollabClass) {
     this.collab = collab;
   }
 
-  open(socket: Socket, id: string, key: string) {
+  open(socket: WebSocket, id: string, key: string) {
     this.socket = socket;
     this.roomId = id;
     this.roomKey = key;
+    this.SocketId = randomId();
+    this.socket.onopen = () => {
+      console.log("connected");
+    }
+    //   let count = 0;
+    this.socket.onmessage = (event) => {
+      //     console.log("count", count, ":", event.data);
 
+      const { e_type, data } = JSON.parse(event.data);
+
+      switch (e_type) {
+        case "init-room":
+          handleInitRoom(this);
+          break;
+        case "new-user":
+          handleNewUser(this, data.socketId);
+          break;
+        case "room-user-change":
+          handleRoomUserChange(this, data.clients);
+          break;
+        default:
+          //  console.log(e_type);
+          this.onCallBackMessage(event);
+          break;
+
+      }
+    }
     // Initialize socket listeners
-    this.socket.on("init-room", () => {
-      if (this.socket) {
-        this.socket.emit("join-room", this.roomId);
+    function handleInitRoom(portal: Portal) {
+      if (portal.socket) {
+        const initRoomData = {
+          e_type: "join-room",
+          roomId: portal.roomId
+        }
+        socket.send(JSON.stringify(initRoomData));
         trackEvent("share", "room joined");
       }
-    });
-    this.socket.on("new-user", async (_socketId: string) => {
-      this.broadcastScene(
-        WS_SUBTYPES.INIT,
-        this.collab.getSceneElementsIncludingDeleted(),
-        /* syncAll */ true,
-      );
-    });
-    this.socket.on("room-user-change", (clients: SocketId[]) => {
-      this.collab.setCollaborators(clients);
-    });
+    };
+
+    // this.socket.on("new-user", async (_socketId: string) => {
+    //   this.broadcastScene(
+    //     WS_SUBTYPES.INIT,
+    //     this.collab.getSceneElementsIncludingDeleted(),
+    //     /* syncAll */ true,
+    //   );
+    // });
+
+    const handleNewUser = async (portal: Portal, _socketId: string) => {
+      if (portal.socket) {
+        portal.broadcastScene(
+          WS_SUBTYPES.INIT,
+          portal.collab.getSceneElementsIncludingDeleted(),
+          /* syncAll */ true,
+        );
+      }
+    };
+
+    // this.socket.on("room-user-change", (clients: SocketId[]) => {
+    //   this.collab.setCollaborators(clients);
+    // });
+
+    function handleRoomUserChange(portal: Portal, clients: SocketId[]) {
+      if (portal.socket) {
+        portal.collab.setCollaborators(clients);
+      }
+    }
 
     return socket;
   }
@@ -91,12 +148,16 @@ class Portal {
       const json = JSON.stringify(data);
       const encoded = new TextEncoder().encode(json);
       const { encryptedBuffer, iv } = await encryptData(this.roomKey!, encoded);
-
-      this.socket?.emit(
-        volatile ? WS_EVENTS.SERVER_VOLATILE : WS_EVENTS.SERVER,
-        roomId ?? this.roomId,
-        encryptedBuffer,
-        iv,
+      // console.log(encryptedBuffer);
+      const s_data = {
+        socketId: this.SocketId,
+        e_type: volatile ? WS_EVENTS.SERVER_VOLATILE : WS_EVENTS.SERVER,
+        roomId: roomId ?? this.roomId,
+        encryptedBuffer: Array.from(new Uint8Array(encryptedBuffer)),
+        iv: Array.from(iv),
+      }
+      this.socket?.send(
+        JSON.stringify(s_data)
       );
     }
   }
@@ -183,11 +244,11 @@ class Portal {
   };
 
   broadcastIdleChange = (userState: UserIdleState) => {
-    if (this.socket?.id) {
+    if (this.SocketId) {
       const data: SocketUpdateDataSource["IDLE_STATUS"] = {
         type: WS_SUBTYPES.IDLE_STATUS,
         payload: {
-          socketId: this.socket.id as SocketId,
+          socketId: this.SocketId as SocketId,
           userState,
           username: this.collab.state.username,
         },
@@ -203,11 +264,12 @@ class Portal {
     pointer: SocketUpdateDataSource["MOUSE_LOCATION"]["payload"]["pointer"];
     button: SocketUpdateDataSource["MOUSE_LOCATION"]["payload"]["button"];
   }) => {
-    if (this.socket?.id) {
+
+    if (this.SocketId) {
       const data: SocketUpdateDataSource["MOUSE_LOCATION"] = {
         type: WS_SUBTYPES.MOUSE_LOCATION,
         payload: {
-          socketId: this.socket.id as SocketId,
+          socketId: this.SocketId as SocketId,
           pointer: payload.pointer,
           button: payload.button || "up",
           selectedElementIds:
@@ -229,11 +291,11 @@ class Portal {
     },
     roomId: string,
   ) => {
-    if (this.socket?.id) {
+    if (this.SocketId) {
       const data: SocketUpdateDataSource["USER_VISIBLE_SCENE_BOUNDS"] = {
         type: WS_SUBTYPES.USER_VISIBLE_SCENE_BOUNDS,
         payload: {
-          socketId: this.socket.id as SocketId,
+          socketId: this.SocketId as SocketId,
           username: this.collab.state.username,
           sceneBounds: payload.sceneBounds,
         },
@@ -248,8 +310,12 @@ class Portal {
   };
 
   broadcastUserFollowed = (payload: OnUserFollowedPayload) => {
-    if (this.socket?.id) {
-      this.socket.emit(WS_EVENTS.USER_FOLLOW_CHANGE, payload);
+    if (this.SocketId) {
+      const userf_payload = {
+        type: WS_EVENTS.USER_FOLLOW_CHANGE,
+        data: payload
+      }
+      this.socket?.send(JSON.stringify(userf_payload));
     }
   };
 }
