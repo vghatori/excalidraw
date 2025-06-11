@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Document</title>
+</head>
+<body>
+    <form>
+        <input type="text" id="inp">
+        <button type="button" onclick="handlesend()">send</button>
+    </form>
+    <script>  
+        const socket = new WebSocket('ws://localhost:5000/ws');
+
+        const handlesend = () => {
+            let message = document.getElementById("inp");
+            socket.send(message.value);
+            message.value = '';
+        }  
+
+        socket.onopen = (event) => {
+            console.log("connected to server");
+            socket.send("hello new Player connect to your server");
+        }
+
+        socket.onmessage = (msg) => {
+            console.log(msg.data);
+        }
+
+        socket.onclose = () => {
+            console.log("disconnected");
+        }
+    </script>
+</body>
+</html>
